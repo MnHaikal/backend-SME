@@ -46,8 +46,23 @@ class OTPVerifyRequest(BaseModel):
 class GoogleLoginRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
     email: EmailStr
-    id_token: str
+    id_token: Optional[str] = None
 
 class UserUpdateSchema(BaseModel):
     name: str
+
+class ForgotPasswordRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+    email: EmailStr
+
+class ResetPasswordRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+    email: EmailStr
+    otp_code: str
+    new_password: str
+
+class ChangePasswordRequest(BaseModel):
+    email: str
+    old_password: str
+    new_password: str
 

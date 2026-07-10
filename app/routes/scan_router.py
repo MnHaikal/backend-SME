@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 from app.routes.auth import supabase
+from app.utils.logger import create_activity_log
 
 router = APIRouter(
     prefix="/api/v1/scan",
@@ -10,15 +11,17 @@ router = APIRouter(
 
 class ScanInSchema(BaseModel):
     sku: str
-    qty_masuk: int
-    name: Optional[str] = "Produk Scan"
-    category: Optional[str] = "Lainnya"
-    status: Optional[str] = "Available"
-    image_url: Optional[str] = ""
+    name: str
+    category: str
+    qty: int
+    status: str
+    image_url: str
+    user_id: Optional[str] = None
 
 class ScanOutSchema(BaseModel):
     sku: str
     qty_keluar: int
+    user_id: Optional[str] = None
 
 @router.post("/in")
 def scan_in(data: ScanInSchema):
@@ -31,10 +34,12 @@ def scan_in(data: ScanInSchema):
         if check_response.data and len(check_response.data) > 0:
             # SKU ada, tambahkan qty
             existing_product = check_response.data[0]
-            new_qty = existing_product["qty"] + data.qty_masuk
+            new_qty = existing_product["qty"] + data.qty
             
             update_response = supabase.table("inventory").update({"qty": new_qty}).eq("sku", data.sku).execute()
             if update_response.data:
+                if data.user_id:
+                    create_activity_log(data.user_id, "SCAN_IN", f"Scanned in product: {data.name}")
                 return {
                     "message": "Stok berhasil ditambahkan",
                     "data": update_response.data[0]
@@ -46,12 +51,14 @@ def scan_in(data: ScanInSchema):
                 "sku": data.sku,
                 "name": data.name,
                 "category": data.category,
-                "qty": data.qty_masuk,
+                "qty": data.qty,
                 "status": data.status,
                 "image_url": data.image_url
             }
             insert_response = supabase.table("inventory").insert(new_product).execute()
             if insert_response.data:
+                if data.user_id:
+                    create_activity_log(data.user_id, "SCAN_IN", f"Scanned in product: {data.name}")
                 return {
                     "message": "Produk baru berhasil ditambahkan",
                     "data": insert_response.data[0]
@@ -86,6 +93,9 @@ def scan_out(data: ScanOutSchema):
         update_response = supabase.table("inventory").update({"qty": new_qty}).eq("sku", data.sku).execute()
         
         if update_response.data:
+            if data.user_id:
+                product_name = existing_product.get("name", data.sku)
+                create_activity_log(data.user_id, "SCAN_OUT", f"Scanned out product: {product_name}")
             return {
                 "message": "Stok berhasil dikurangi",
                 "data": update_response.data[0]
@@ -97,3 +107,15 @@ def scan_out(data: ScanOutSchema):
     except Exception as e:
         print(f"Error Scan Out: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Terjadi kesalahan internal: {str(e)}")
+
+@router.post("/result")
+def scan_result(data: ScanInSchema):
+    # Dummy endpoint for standardization requirement
+    print("\n" + "="*50)
+    print(f"🚀 [LOG] Flutter mengakses halaman Scan (POST /result) (SKU: {data.sku})")
+    print("="*50 + "\n")
+    return {
+        "status": "success",
+        "message": "Hasil scan berhasil diterima",
+        "data": data.model_dump()
+    }
