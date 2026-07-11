@@ -9,7 +9,7 @@ router = APIRouter(prefix="/api/harga", tags=["Scraping - Tren & Rekomendasi Har
 # 1. Koneksi ke MongoDB
 MONGO_URI = os.getenv("MONGO_URI", "mongodb+srv://muhammadazmi8978_db_user:azmi12345678@amiii.uoskbzh.mongodb.net/?appName=amiii")
 client = MongoClient(MONGO_URI)
-db = client["muhammadazmi8978_db_user"] # Ganti dengan nama database Anda
+db = client["Capstone_SME"] # Ganti dengan nama database Anda
 
 # Definisikan kedua collection Anda di sini
 collection_trend = db["Fashion_Trends"]         # Ganti dengan nama collection trend Anda
