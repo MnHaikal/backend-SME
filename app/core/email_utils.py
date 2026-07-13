@@ -19,10 +19,14 @@ def send_otp_email(receiver_email: str, otp_code: str):
     msg['To'] = receiver_email
 
     try:
-        with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT) as server:
+        # Railway terkadang memblokir port 465 (SSL langsung), 
+        # jadi kita coba gunakan port 587 (STARTTLS) yang merupakan standar modern.
+        server_port = 587 if SMTP_PORT == 465 else SMTP_PORT 
+        with smtplib.SMTP(SMTP_SERVER, server_port) as server:
+            server.starttls() # Mulai enkripsi TLS
             server.login(SMTP_USER, SMTP_PASSWORD)
             server.send_message(msg)
         print(f"=== EMAIL OTP: Berhasil dikirim ke {receiver_email} ===")
     except Exception as e:
-        print(f"GAGAL AUTENTIKASI: Pastikan email benar dan Anda menggunakan 16 DIGIT SANDI APLIKASI (App Password) Google, BUKAN password email biasa! Error detail: {e}")
-        raise Exception("Gagal mengirim email OTP, periksa konfigurasi server email.")
+        print(f"Gagal mengirim email ke {receiver_email}: {e}")
+        raise Exception("Gagal mengirim email OTP, pastikan jaringan tidak diblokir atau gunakan API Email (seperti Resend/SendGrid).")
