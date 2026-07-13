@@ -412,21 +412,9 @@ async def forgot_password(request: ForgotPasswordRequest):
         # 5. Print OTP di terminal VS Code untuk testing
         print(f"OTP untuk {email_clean} adalah: {otp_code}")
         
-        # 6. Kirim OTP via Email dengan smtplib dan MIMEText
+        # 6. Kirim OTP via Email dengan fungsi tersentralisasi (Brevo API)
         try:
-            email_body = f"Kode OTP Anda adalah: {otp_code}. Kode ini berlaku selama 5 menit."
-            msg = MIMEText(email_body, "plain", "utf-8")
-            msg["Subject"] = "Kode OTP Reset Password"
-            msg["From"] = SENDER_EMAIL
-            msg["To"] = email_clean
-            
-            # Koneksi ke server Gmail
-            server = smtplib.SMTP("smtp.gmail.com", 587)
-            server.starttls()  # Mengamankan koneksi
-            server.login(SENDER_EMAIL, SENDER_PASSWORD)
-            server.send_message(msg)
-            server.quit()
-            
+            send_otp_email(email_clean, otp_code)
             print(f"Berhasil mengirim email OTP ke {email_clean}")
         except Exception as email_err:
             print(f"Gagal mengirim email ke {email_clean}: {str(email_err)}")
