@@ -1,32 +1,35 @@
-import smtplib
 import os
-from email.message import EmailMessage
+import json
+import urllib.request
 
-SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.gmail.com")
-SMTP_PORT = int(os.getenv("SMTP_PORT", "465"))  # Menggunakan SSL
-
-# MASUKKAN "Email Asli" DAN "16 Digit Sandi Aplikasi Google Tanpa Spasi"
-SMTP_USER = os.getenv("SMTP_USER")
-SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
+# Gunakan Email Sender yang diverifikasi di Brevo
+SMTP_USER = os.getenv("SMTP_USER", "smallmediumenterprices@gmail.com")
+BREVO_API_KEY = os.getenv("BREVO_API_KEY")
 
 def send_otp_email(receiver_email: str, otp_code: str):
-    msg = EmailMessage()
-    msg.set_content(f"Halo,\n\nKode OTP Anda untuk Smart-SME adalah: {otp_code}\n\nKode ini akan kedaluwarsa dalam 5 menit. Jangan berikan kode ini kepada siapa pun.")
-    msg['Subject'] = 'Kode OTP Verifikasi Smart-SME'
+    if not BREVO_API_KEY:
+        print(f"PERINGATAN: BREVO_API_KEY belum diatur di environment. OTP: {otp_code}")
+        # Jangan throw exception agar aplikasi tidak error selama masa transisi
+        return
+        
+    url = "https://api.brevo.com/v3/smtp/email"
+    headers = {
+        "accept": "application/json",
+        "api-key": BREVO_API_KEY,
+        "content-type": "application/json"
+    }
     
-    # 🔥 UPDATE: Menambahkan Nama Aplikasi agar terlihat profesional di Gmail user
-    msg['From'] = f"Smart-SME <{SMTP_USER}>" 
-    msg['To'] = receiver_email
-
+    data = {
+        "sender": {"name": "Smart-SME", "email": SMTP_USER},
+        "to": [{"email": receiver_email}],
+        "subject": "Kode OTP Verifikasi Smart-SME",
+        "htmlContent": f"<html><body><p>Halo,</p><p>Kode OTP Anda untuk Smart-SME adalah: <strong style='font-size:24px;'>{otp_code}</strong></p><p>Kode ini akan kedaluwarsa dalam 5 menit. Jangan berikan kode ini kepada siapa pun.</p></body></html>"
+    }
+    
     try:
-        # Railway terkadang memblokir port 465 (SSL langsung), 
-        # jadi kita coba gunakan port 587 (STARTTLS) yang merupakan standar modern.
-        server_port = 587 if SMTP_PORT == 465 else SMTP_PORT 
-        with smtplib.SMTP(SMTP_SERVER, server_port) as server:
-            server.starttls() # Mulai enkripsi TLS
-            server.login(SMTP_USER, SMTP_PASSWORD)
-            server.send_message(msg)
-        print(f"=== EMAIL OTP: Berhasil dikirim ke {receiver_email} ===")
+        req = urllib.request.Request(url, data=json.dumps(data).encode('utf-8'), headers=headers, method='POST')
+        with urllib.request.urlopen(req) as response:
+            print(f"=== EMAIL OTP: Berhasil dikirim ke {receiver_email} via Brevo ===")
     except Exception as e:
-        print(f"Gagal mengirim email ke {receiver_email}: {e}")
-        raise Exception("Gagal mengirim email OTP, pastikan jaringan tidak diblokir atau gunakan API Email (seperti Resend/SendGrid).")
+        print(f"Gagal mengirim email via Brevo API: {e}")
+        raise Exception("Gagal mengirim email OTP via Brevo API.")
