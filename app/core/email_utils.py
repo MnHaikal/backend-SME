@@ -27,7 +27,7 @@ def send_otp_email(receiver_email: str, otp_code: str):
     
     try:
         req = urllib.request.Request(url, data=json.dumps(data).encode('utf-8'), headers=headers, method='POST')
-        with urllib.request.urlopen(req) as response:
+        with urllib.request.urlopen(req, timeout=5) as response:
             print(f"=== EMAIL OTP: Berhasil dikirim ke {receiver_email} via Brevo API Teman ===")
     except Exception as e:
         print(f"Gagal mengirim email via Brevo API: {e}")
