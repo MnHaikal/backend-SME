@@ -11,6 +11,8 @@ ENV PYTHONPATH=/app
 # Install dependencies sistem yang diperlukan
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
+    pkg-config \
+    default-libmysqlclient-dev \
     libgl1 \
     libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
