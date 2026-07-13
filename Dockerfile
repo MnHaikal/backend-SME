@@ -28,4 +28,4 @@ COPY . .
 RUN chmod -R 755 /app
 
 # Jalankan Uvicorn
-CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD sh -c "python -m uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080}"
