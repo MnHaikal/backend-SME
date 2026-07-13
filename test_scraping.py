@@ -5,7 +5,7 @@ import random
 # Koneksi ke MongoDB (Sesuaikan dengan URI Anda di scraper.py)
 MONGO_URI = os.getenv("MONGO_URI", "mongodb+srv://muhammadazmi8978_db_user:azmi12345678@amiii.uoskbzh.mongodb.net/?appName=amiii")
 client = MongoClient(MONGO_URI)
-db = client["muhammadazmi8978_db_user"]
+db = client["Capstone_SME"]
 
 collection_trend = db["Fashion_Trends"]
 collection_rekomendasi = db["Price_Recommendations"]
