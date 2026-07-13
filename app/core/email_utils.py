@@ -2,12 +2,12 @@ import smtplib
 import os
 from email.message import EmailMessage
 
-SMTP_SERVER = "smtp.gmail.com"
-SMTP_PORT = 465 # Menggunakan SSL
+SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.gmail.com")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "465"))  # Menggunakan SSL
 
 # MASUKKAN "Email Asli" DAN "16 Digit Sandi Aplikasi Google Tanpa Spasi"
-SMTP_USER = "smallmediumenterprices@gmail.com"
-SMTP_PASSWORD = "fxymuofmkqvoxgsy" # 🔥 SPASI SUDAH DIHAPUS
+SMTP_USER = os.getenv("SMTP_USER")
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
 
 def send_otp_email(receiver_email: str, otp_code: str):
     msg = EmailMessage()

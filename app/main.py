@@ -1,3 +1,6 @@
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
@@ -82,7 +85,7 @@ app.include_router(notifications.router)
 app.include_router(analytics.router)
 app.include_router(activity_logs.router)
 
-import scraper
+from app.routes import scraper
 app.include_router(scraper.router)
 
 @app.get("/", tags=["Root"])

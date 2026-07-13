@@ -1,0 +1,23 @@
+# Environment Variables - JANGAN di-commit ke GitHub!
+.env
+.env.local
+.env.production
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# Database lokal
+*.db
+*.sqlite3
+
+# IDE
+.vscode/
+.idea/

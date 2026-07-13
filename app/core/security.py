@@ -2,14 +2,15 @@ from datetime import datetime, timedelta
 from typing import Optional
 from passlib.context import CryptContext
 from jose import JWTError, jwt
+import os
 
 # Menggunakan Bcrypt dengan skema standar industri (Sesuai Matkul Keamanan Data)
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-# Konfigurasi JWT (Sesuai Matkul Web Service)
-SECRET_KEY = "SUPER_SECRET_KEY_CAPSTONE_SME_JWT_2026"
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60
+# Konfigurasi JWT (Sesuai Matkul Web Service) - dibaca dari environment variable
+SECRET_KEY = os.getenv("SECRET_KEY")
+ALGORITHM = os.getenv("ALGORITHM", "HS256")
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Memverifikasi apakah password murni cocok dengan hash Bcrypt di DB"""

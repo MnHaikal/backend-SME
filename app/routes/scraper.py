@@ -7,7 +7,7 @@ import os
 router = APIRouter(prefix="/api/harga", tags=["Scraping - Tren & Rekomendasi Harga"])
 
 # 1. Koneksi ke MongoDB
-MONGO_URI = os.getenv("MONGO_URI", "mongodb+srv://muhammadazmi8978_db_user:azmi12345678@amiii.uoskbzh.mongodb.net/?appName=amiii")
+MONGO_URI = os.getenv("MONGO_URI")
 client = MongoClient(MONGO_URI)
 db = client["Capstone_SME"] # Ganti dengan nama database Anda
 

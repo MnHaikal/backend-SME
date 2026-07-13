@@ -5,7 +5,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 router = APIRouter(prefix="/api/v1/market", tags=["3. AI Market Intelligence"])
 
 # Menggunakan os.getenv agar tidak ada hardcoded password
-MONGO_URI = os.getenv("MONGO_URI", "mongodb+srv://mnurmahaikal106_db_user:SmartSME2026@cluster0.rb3piai.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
+MONGO_URI = os.getenv("MONGO_URI_MARKET")
 
 client = AsyncIOMotorClient(MONGO_URI)
 db_mongo = client["smartsme_ai"] 
