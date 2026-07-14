@@ -284,7 +284,15 @@ async def scan_inventory(
 
 
 @router.get("/all")
-def get_all_inventory(search: Optional[str] = None, current_user_id: str = Depends(get_current_user_id)):
+def get_all_inventory(
+    search: Optional[str] = None, 
+    user_id: Optional[str] = Query(None),
+    token_user_id: Optional[str] = Depends(get_optional_current_user_id)
+):
+    current_user_id = token_user_id or user_id
+    if not current_user_id:
+        return JSONResponse(status_code=401, content={"status": "error", "message": "Not authenticated: user_id missing"})
+
     print("\n" + "="*50)
     print(f"🚀 [LOG] Flutter mengakses halaman Inventory (GET /all) (search={search})")
     try:
