@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, Depends, Form, File, UploadFile
 from fastapi.responses import JSONResponse
 from datetime import datetime, timezone
 import uuid
-from app.core.security import get_current_user_id
+from app.core.security import get_current_user_id, get_optional_current_user_id
 from pydantic import BaseModel
 from typing import Optional, List
 import os
@@ -87,8 +87,13 @@ async def add_inventory(
     price: int = Form(...),
     qty: int = Form(...),
     product_image: UploadFile = File(None),
-    current_user_id: str = Depends(get_current_user_id)
+    user_id: Optional[str] = Form(None),
+    token_user_id: Optional[str] = Depends(get_optional_current_user_id)
 ):
+    current_user_id = token_user_id or user_id
+    if not current_user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated: user_id missing")
+        
     if not supabase:
         raise HTTPException(status_code=500, detail="Supabase client not initialized")
         
@@ -147,8 +152,13 @@ async def scan_inventory(
     color: Optional[str] = Form(None),
     price: Optional[int] = Form(None),
     product_image: UploadFile = File(None),
-    current_user_id: str = Depends(get_current_user_id)
+    user_id: Optional[str] = Form(None),
+    token_user_id: Optional[str] = Depends(get_optional_current_user_id)
 ):
+    current_user_id = token_user_id or user_id
+    if not current_user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated: user_id missing")
+        
     payload_variabel_kamu = {
         "sku": sku,
         "scan_type": scan_type,

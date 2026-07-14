@@ -55,3 +55,16 @@ def get_current_user_id(credentials: HTTPAuthorizationCredentials = Depends(secu
         return user_id
     except JWTError:
         raise credentials_exception
+
+security_optional = HTTPBearer(auto_error=False)
+
+def get_optional_current_user_id(credentials: HTTPAuthorizationCredentials = Depends(security_optional)) -> Optional[str]:
+    """Mengekstrak user_id dari token JWT, tidak error jika kosong"""
+    if not credentials:
+        return None
+    token = credentials.credentials
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return payload.get("user_id")
+    except JWTError:
+        return None

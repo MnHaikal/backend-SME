@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import Optional
 import uuid
 from pydantic import BaseModel
-from app.core.security import get_current_user_id
+from app.core.security import get_current_user_id, get_optional_current_user_id
 import os
 from pymongo import MongoClient
 
@@ -33,8 +33,13 @@ async def scan_inventory(
     color: Optional[str] = Form(None),
     product_image: UploadFile = File(None),
     selling_price: Optional[int] = Form(None),
-    current_user_id: str = Depends(get_current_user_id)
+    user_id: Optional[str] = Form(None),
+    token_user_id: Optional[str] = Depends(get_optional_current_user_id)
 ):
+    current_user_id = token_user_id or user_id
+    if not current_user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated: user_id missing")
+        
     print("\n" + "="*50)
     print("🚀 [LOG] Endpoint /api/v1/inventory/scan dipanggil!")
     
@@ -365,8 +370,13 @@ async def update_inventory(
     status: Optional[str] = Form(None),
     qty: Optional[int] = Form(None),
     product_image: UploadFile = File(None),
-    current_user_id: str = Depends(get_current_user_id)
+    user_id: Optional[str] = Form(None),
+    token_user_id: Optional[str] = Depends(get_optional_current_user_id)
 ):
+    current_user_id = token_user_id or user_id
+    if not current_user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated: user_id missing")
+        
     print("\n" + "="*50)
     print(f"🚀 [LOG] Endpoint PUT /api/v1/inventory/{item_id} dipanggil!")
     try:
