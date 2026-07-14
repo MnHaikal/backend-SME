@@ -1,8 +1,10 @@
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
 from pymongo import MongoClient
 from bson import ObjectId
 from typing import List, Dict, Any
 import os
+from app.core.security import get_current_user_id
+from app.routes.auth import supabase
 
 router = APIRouter(prefix="/api/harga", tags=["Scraping - Tren & Rekomendasi Harga"])
 
@@ -42,7 +44,7 @@ def get_trend_harga(
 
 # ==================== ENDPOINT 2: REKOMENDASI HARGA ====================
 @router.get("/rekomendasi", response_model=List[Dict[str, Any]])
-def get_rekomendasi_harga():
+def get_rekomendasi_harga(current_user_id: str = Depends(get_current_user_id)):
     """
     Endpoint untuk mengambil data rekomendasi harga terbaru dari MASING-MASING KATEGORI.
     """
@@ -62,6 +64,39 @@ def get_rekomendasi_harga():
         
         if not hasil:
             raise HTTPException(status_code=404, detail="Data rekomendasi belum tersedia")
+            
+        # Ambil data inventory user untuk mencocokkan harga
+        user_inv_res = supabase.table("inventory").select("category, price, selling_price").eq("user_id", current_user_id).execute()
+        user_inventory = user_inv_res.data or []
+        
+        # Iterasi pada data pasar dan gabungkan dengan data inventory user
+        for item in hasil:
+            kategori_market = str(item.get("kategori", "")).lower().strip()
+            
+            # Cari produk di koleksi inventory yang kategorinya sama
+            matching_items = [
+                inv for inv in user_inventory 
+                if str(inv.get("category", "")).lower().strip() == kategori_market
+            ]
+            
+            if matching_items:
+                total_selling = sum(inv.get("selling_price") or 0 for inv in matching_items)
+                total_cost = sum(inv.get("price") or 0 for inv in matching_items)
+                count = len(matching_items)
+                
+                item["yours"] = round(total_selling / count)
+                item["modal"] = round(total_cost / count)
+            else:
+                item["yours"] = 0
+                item["modal"] = 0
+                
+            # Pastikan tidak ada key yang bernilai null
+            for k, v in item.items():
+                if v is None:
+                    if k in ["rata2", "saran", "yours", "modal"]:
+                        item[k] = 0
+                    else:
+                        item[k] = ""
             
         print(f"Total data dikirim: {len(hasil)}")
         print(f"Kategori yang ditemukan: {[d.get('kategori') for d in hasil]}")
