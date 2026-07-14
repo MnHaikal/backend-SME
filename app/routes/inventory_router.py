@@ -2,10 +2,18 @@ from fastapi import APIRouter, HTTPException, Depends, Form, File, UploadFile
 from fastapi.responses import JSONResponse
 from datetime import datetime, timezone
 import uuid
+from app.core.security import get_current_user_id
 from pydantic import BaseModel
 from typing import Optional, List
 import os
 from supabase import create_client, Client
+from pymongo import MongoClient
+
+# Setup MongoDB Connection untuk Analytics / Sales Performance
+MONGO_URI = os.getenv("MONGO_URI", "mongodb+srv://muhammadazmi8978_db_user:azmi12345678@amiii.uoskbzh.mongodb.net/?appName=amiii")
+mongo_client = MongoClient(MONGO_URI)
+mongo_db = mongo_client["muhammadazmi8978_db_user"]
+mongo_transactions = mongo_db["inventory_logs"] # Sesuaikan dengan nama collection log transaksi Anda
 
 router = APIRouter(
     prefix="/api/v1/inventory",
@@ -29,11 +37,11 @@ class ProductSchema(BaseModel):
 
 
 @router.get("", response_model=List[ProductSchema])
-def get_products():
+def get_products(current_user_id: str = Depends(get_current_user_id)):
     if not supabase:
         raise HTTPException(status_code=500, detail="Supabase client not initialized")
     try:
-        response = supabase.table("inventory").select("*").execute()
+        response = supabase.table("inventory").select("*").eq("user_id", current_user_id).execute()
         return response.data
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -41,13 +49,13 @@ def get_products():
 
 
 @router.put("/{id}", response_model=ProductSchema)
-def update_product(id: int, product: ProductSchema):
+def update_product(id: int, product: ProductSchema, current_user_id: str = Depends(get_current_user_id)):
     if not supabase:
         raise HTTPException(status_code=500, detail="Supabase client not initialized")
     try:
         product_dict = product.model_dump(exclude_none=True)
         user_id = product_dict.pop("user_id", None)
-        response = supabase.table("inventory").update(product_dict).eq("id", id).execute()
+        response = supabase.table("inventory").update(product_dict).eq("id", id).eq("user_id", current_user_id).execute()
         if response.data:
             if user_id:
                 print("Merekam log edit produk...")
@@ -58,11 +66,11 @@ def update_product(id: int, product: ProductSchema):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.delete("/{id}")
-def delete_product(id: int):
+def delete_product(id: int, current_user_id: str = Depends(get_current_user_id)):
     if not supabase:
         raise HTTPException(status_code=500, detail="Supabase client not initialized")
     try:
-        response = supabase.table("inventory").delete().eq("id", id).execute()
+        response = supabase.table("inventory").delete().eq("id", id).eq("user_id", current_user_id).execute()
         if response.data:
             return {"message": "Product deleted successfully"}
         raise HTTPException(status_code=404, detail="Product not found or delete failed")
@@ -78,7 +86,8 @@ async def add_inventory(
     color: str = Form(...),
     price: int = Form(...),
     qty: int = Form(...),
-    product_image: UploadFile = File(None)
+    product_image: UploadFile = File(None),
+    current_user_id: str = Depends(get_current_user_id)
 ):
     if not supabase:
         raise HTTPException(status_code=500, detail="Supabase client not initialized")
@@ -113,7 +122,8 @@ async def add_inventory(
             "price": price,
             "qty": qty,
             "status": "NORMAL",
-            "image_url": image_url
+            "image_url": image_url,
+            "user_id": current_user_id
         }
         
         response = supabase.table("inventory").insert(data_insert).execute()
@@ -136,7 +146,8 @@ async def scan_inventory(
     size: Optional[str] = Form(None),
     color: Optional[str] = Form(None),
     price: Optional[int] = Form(None),
-    product_image: UploadFile = File(None)
+    product_image: UploadFile = File(None),
+    current_user_id: str = Depends(get_current_user_id)
 ):
     payload_variabel_kamu = {
         "sku": sku,
@@ -159,7 +170,7 @@ async def scan_inventory(
             return JSONResponse(status_code=400, content={"status": "error", "message": "scan_type harus 'in' atau 'out'"})
             
         # Cek Database
-        response = supabase.table("inventory").select("*").eq("sku", sku_clean).execute()
+        response = supabase.table("inventory").select("*").eq("sku", sku_clean).eq("user_id", current_user_id).execute()
         
         # LOGIKA JIKA BARANG SUDAH ADA
         if response.data:
@@ -182,7 +193,7 @@ async def scan_inventory(
             }
             
             # Eksekusi Update
-            supabase.table("inventory").update(update_data).eq("sku", sku_clean).execute()
+            supabase.table("inventory").update(update_data).eq("sku", sku_clean).eq("user_id", current_user_id).execute()
             
             # Ambil data terbaru untuk dikembalikan
             barang_lama["qty"] = qty_baru
@@ -230,7 +241,8 @@ async def scan_inventory(
                 "qty": qty,
                 "status": "NORMAL",
                 "image_url": image_url,
-                "last_updated": datetime.now(timezone.utc).isoformat()
+                "last_updated": datetime.now(timezone.utc).isoformat(),
+                "user_id": current_user_id
             }
             
             supabase.table("inventory").insert(data_insert).execute()
@@ -244,3 +256,237 @@ async def scan_inventory(
     except Exception as e:
         print(f"ERROR DATABASE/SERVER: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+@router.get("/sales-performance")
+def get_sales_performance(current_user_id: str = Depends(get_current_user_id)):
+    """
+    Endpoint untuk menghitung total omzet (uang masuk) dari barang yang di-Scan Out setiap bulannya.
+    Menggunakan Aggregation Pipeline MongoDB.
+    """
+    try:
+        pipeline = [
+            # 0. Filter khusus user ini
+            {
+                "$match": { "user_id": current_user_id }
+            },
+            # 1. Filter HANYA pada transaksi barang keluar (penjualan)
+            # Sesuaikan "type" atau "scan_type" dengan field di document MongoDB Anda
+            {
+                "$match": {
+                    "$or": [
+                        {"type": "OUT"},
+                        {"scan_type": "out"}
+                    ]
+                }
+            },
+            # 2. Fix tipe data (String ke Date, dan String ke Angka)
+            {
+                "$addFields": {
+                    "parsed_date": {
+                        "$convert": {
+                            "input": { "$ifNull": ["$timestamp", "$created_at"] },
+                            "to": "date",
+                            "onError": None,
+                            "onNull": None
+                        }
+                    },
+                    "parsed_qty": {
+                        "$convert": { "input": "$qty", "to": "double", "onError": 0, "onNull": 0 }
+                    },
+                    "parsed_harga_jual": {
+                        "$convert": { "input": { "$ifNull": ["$harga_jual", "$selling_price"] }, "to": "double", "onError": 0, "onNull": 0 }
+                    },
+                    "parsed_total_harga": {
+                        "$convert": { "input": "$total_harga", "to": "double", "onError": 0, "onNull": 0 }
+                    }
+                }
+            },
+            # Buang document yang tanggalnya tidak bisa diparsing
+            {
+                "$match": { "parsed_date": { "$ne": None } }
+            },
+            # 3. Group berdasarkan bulan dan tahun dari tanggal transaksi, lalu Sum total omzet
+            {
+                "$group": {
+                    "_id": {
+                        "month": {"$month": "$parsed_date"},
+                        "year": {"$year": "$parsed_date"}
+                    },
+                    "total_revenue": {
+                        "$sum": {
+                            "$cond": [
+                                {"$gt": ["$parsed_total_harga", 0]},
+                                "$parsed_total_harga",
+                                {"$multiply": ["$parsed_qty", "$parsed_harga_jual"]}
+                            ]
+                        }
+                    }
+                }
+            },
+            # 3. Urutkan hasilnya dari bulan paling lama ke bulan terbaru
+            {
+                "$sort": {
+                    "_id.year": 1,
+                    "_id.month": 1
+                }
+            },
+            # 4. Format hasil kembalian (Project) agar menjadi array JSON rata
+            {
+                "$project": {
+                    "_id": 0,
+                    "month": "$_id.month",
+                    "year": "$_id.year",
+                    "total_revenue": 1
+                }
+            }
+        ]
+
+        # Eksekusi pipeline di MongoDB
+        cursor = mongo_transactions.aggregate(pipeline)
+        result = list(cursor)
+        
+        print(f"🚀 [LOG] /sales-performance result: {result}")
+
+        return JSONResponse(status_code=200, content=result)
+
+    except Exception as e:
+        print(f"Error fetching sales performance: {e}")
+        raise HTTPException(status_code=500, detail=f"Gagal mengambil performa penjualan: {str(e)}")
+
+
+@router.get("/monthly-profit")
+def get_monthly_profit(current_user_id: str = Depends(get_current_user_id)):
+    """
+    Endpoint untuk menghitung grafik 'Performa Penjualan Bulanan' / Monthly Profit.
+    Logika Profit meniru perhitungan sistem saat ini: (harga_jual - harga_beli) * qty
+    Menggunakan Aggregation Pipeline MongoDB.
+    """
+    try:
+        pipeline = [
+            # 0. Filter khusus user ini
+            {
+                "$match": { "user_id": current_user_id }
+            },
+            # 1. Filter HANYA pada transaksi barang keluar (penjualan)
+            {
+                "$match": {
+                    "$or": [
+                        {"type": "OUT"},
+                        {"scan_type": "out"}
+                    ]
+                }
+            },
+            # 2. Lookup ke koleksi produk/inventory untuk mengambil harga jika tidak ada di log
+            {
+                "$lookup": {
+                    "from": "inventory", # Nama koleksi produk di MongoDB
+                    "localField": "sku",
+                    "foreignField": "sku",
+                    "as": "product_info"
+                }
+            },
+            {
+                "$unwind": {
+                    "path": "$product_info",
+                    "preserveNullAndEmptyArrays": True
+                }
+            },
+            # 3. Fix tipe data (String ke Date, dan String ke Angka) beserta Fallback Harga
+            {
+                "$addFields": {
+                    "parsed_date": {
+                        "$dateFromString": {
+                            "dateString": { "$ifNull": ["$timestamp", "$created_at", "$createdAt"] },
+                            "onError": None,
+                            "onNull": None
+                        }
+                    },
+                    "parsed_qty": {
+                        "$convert": { "input": "$qty", "to": "double", "onError": 0, "onNull": 0 }
+                    },
+                    "parsed_harga_jual": {
+                        "$convert": { 
+                            "input": { 
+                                "$ifNull": [
+                                    "$harga_jual", 
+                                    "$selling_price", 
+                                    "$product_info.selling_price",
+                                    "$product_info.harga_jual"
+                                ] 
+                            }, 
+                            "to": "double", "onError": 0, "onNull": 0 
+                        }
+                    },
+                    "parsed_harga_beli": {
+                        "$convert": { 
+                            "input": { 
+                                "$ifNull": [
+                                    "$harga_beli", 
+                                    "$price", 
+                                    "$product_info.price",
+                                    "$product_info.harga_beli"
+                                ] 
+                            }, 
+                            "to": "double", "onError": 0, "onNull": 0 
+                        }
+                    },
+                    "parsed_profit": {
+                        "$convert": { "input": "$profit", "to": "double", "onError": 0, "onNull": 0 }
+                    }
+                }
+            },
+            # Buang document yang tanggalnya tidak bisa diparsing
+            {
+                "$match": { "parsed_date": { "$ne": None } }
+            },
+            # 3. Group berdasarkan bulan dan tahun dari tanggal transaksi
+            {
+                "$group": {
+                    "_id": {
+                        "month": {"$month": "$parsed_date"},
+                        "year": {"$year": "$parsed_date"}
+                    },
+                    "total_profit": {
+                        "$sum": {
+                            "$cond": [
+                                {"$gt": ["$parsed_profit", 0]},
+                                "$parsed_profit",
+                                {
+                                    "$multiply": [
+                                        {"$subtract": ["$parsed_harga_jual", "$parsed_harga_beli"]},
+                                        "$parsed_qty"
+                                    ]
+                                }
+                            ]
+                        }
+                    }
+                }
+            },
+            # 3. Urutkan hasilnya dari bulan paling lama ke bulan terbaru
+            {
+                "$sort": {
+                    "_id.year": 1,
+                    "_id.month": 1
+                }
+            },
+            # 4. Format hasil
+            {
+                "$project": {
+                    "_id": 0,
+                    "month": "$_id.month",
+                    "year": "$_id.year",
+                    "total_profit": 1
+                }
+            }
+        ]
+
+        # Eksekusi pipeline di MongoDB
+        cursor = mongo_transactions.aggregate(pipeline)
+        result = list(cursor)
+
+        print(f"🚀 [LOG] /monthly-profit Aggregation Pipeline Result SEBELUM Return: {result}")
+
+        return JSONResponse(status_code=200, content=result)
+
+    except Exception as e:
+        print(f"Error fetching monthly profit: {e}")
+        raise HTTPException(status_code=500, detail=f"Gagal mengambil performa profit bulanan: {str(e)}")

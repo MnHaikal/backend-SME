@@ -1,6 +1,7 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from app.routes.auth import supabase
+from app.core.security import get_current_user_id
 from datetime import datetime, timezone
 
 router = APIRouter(
@@ -9,17 +10,37 @@ router = APIRouter(
 )
 
 @router.get("/summary")
-def get_dashboard_summary():
+def get_dashboard_summary(current_user_id: str = Depends(get_current_user_id)):
     print("\n" + "="*50)
     print("🚀 [LOG] Endpoint GET /api/v1/dashboard/summary dipanggil!")
     
     try:
-        # Mengambil semua data dari tabel inventory
-        response = supabase.table("inventory").select("*").execute()
+        # Mengambil data inventory khusus untuk user yang sedang login
+        response = supabase.table("inventory").select("*").eq("user_id", current_user_id).execute()
         
         data_inventory = response.data
         
-        total_items = 0
+        # GUARD CONDITION: Cek total item terlebih dahulu
+        total_items = sum(item.get("qty", 0) for item in data_inventory) if data_inventory else 0
+        
+        if total_items == 0:
+            print("✅ [SUCCESS] New User / Empty Inventory -> Bypass logic")
+            print("="*50 + "\n")
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "total_items": 0,
+                    "low_stock": 0,
+                    "potential_profit": 0,
+                    "dead_stock": 0,
+                    "notifications": {
+                        "bestseller": "Belum ada produk terjual",
+                        "dead_stock_list": []
+                    }
+                }
+            )
+            
+        # Normal calculation if items > 0
         low_stock = 0
         potential_profit = 0
         dead_stock = 0
@@ -27,38 +48,36 @@ def get_dashboard_summary():
         bestseller_name = None
         highest_sold_qty = -1
         
-        if data_inventory:
-            now = datetime.now(timezone.utc)
-            for item in data_inventory:
-                qty = item.get("qty", 0)
-                total_items += qty
+        now = datetime.now(timezone.utc)
+        for item in data_inventory:
+            qty = item.get("qty", 0)
+            
+            # Menghitung produk yang sisa stoknya kurang dari 16
+            if qty < 16:
+                low_stock += 1
+            
+            # Hitung Profit
+            profit = item.get("total_profit") or 0
+            potential_profit += profit
+            
+            # Hitung Dead Stock (90 hari)
+            last_updated_str = item.get("last_updated")
+            if last_updated_str:
+                try:
+                    # Handle basic ISO format with Z or timezone offset
+                    last_updated_date = datetime.fromisoformat(last_updated_str.replace("Z", "+00:00"))
+                    days_diff = (now - last_updated_date).days
+                    if days_diff > 90:
+                        dead_stock += 1
+                except Exception as e:
+                    pass
+            
+            # Bestseller (Tertinggi)
+            sold_qty = item.get("sold_qty") or 0
+            if sold_qty > highest_sold_qty and sold_qty > 0:
+                highest_sold_qty = sold_qty
+                bestseller_name = item.get("name", "Unknown")
                 
-                # Menghitung produk yang sisa stoknya kurang dari 16
-                if qty < 16:
-                    low_stock += 1
-                
-                # Hitung Profit
-                profit = item.get("total_profit") or 0
-                potential_profit += profit
-                
-                # Hitung Dead Stock (90 hari)
-                last_updated_str = item.get("last_updated")
-                if last_updated_str:
-                    try:
-                        # Handle basic ISO format with Z or timezone offset
-                        last_updated_date = datetime.fromisoformat(last_updated_str.replace("Z", "+00:00"))
-                        days_diff = (now - last_updated_date).days
-                        if days_diff > 90:
-                            dead_stock += 1
-                    except Exception as e:
-                        pass
-                
-                # Bestseller (Tertinggi)
-                sold_qty = item.get("sold_qty") or 0
-                if sold_qty > highest_sold_qty and sold_qty > 0:
-                    highest_sold_qty = sold_qty
-                    bestseller_name = item.get("name", "Unknown")
-                    
         print(f"✅ [SUCCESS] Perhitungan selesai -> Total Item: {total_items}, Low Stock: {low_stock}, Profit: {potential_profit}, Dead Stock: {dead_stock}")
         print("="*50 + "\n")
         
@@ -89,20 +108,20 @@ from collections import defaultdict
 import calendar
 
 @router.get("/stats")
-def get_dashboard_stats():
+def get_dashboard_stats(current_user_id: str = Depends(get_current_user_id)):
     print("\n" + "="*50)
     print("🚀 [LOG] Endpoint GET /api/v1/dashboard/stats dipanggil!")
     
     try:
-        # 1. Hitung total stok
-        inv_response = supabase.table("inventory").select("qty").execute()
+        # 1. Hitung total stok khusus user ini
+        inv_response = supabase.table("inventory").select("qty").eq("user_id", current_user_id).execute()
         total_inventory = sum(item.get("qty", 0) for item in inv_response.data) if inv_response.data else 0
         
-        # 2. Hitung akumulasi potential_profit per bulan (12 bulan terakhir)
+        # 2. Hitung akumulasi potential_profit per bulan (12 bulan terakhir) khusus user ini
         now = datetime.now(timezone.utc)
         twelve_months_ago = now - timedelta(days=365)
         
-        tx_response = supabase.table("transactions").select("profit, created_at").eq("scan_type", "out").gte("created_at", twelve_months_ago.isoformat()).execute()
+        tx_response = supabase.table("transactions").select("profit, created_at").eq("user_id", current_user_id).eq("scan_type", "out").gte("created_at", twelve_months_ago.isoformat()).execute()
         
         labels = []
         profit_data = []

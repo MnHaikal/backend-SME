@@ -1,9 +1,17 @@
-from fastapi import APIRouter, Form, File, UploadFile, HTTPException
+from fastapi import APIRouter, Form, File, UploadFile, HTTPException, Depends
 from fastapi.responses import JSONResponse
 from datetime import datetime, timezone
 from typing import Optional
 import uuid
 from pydantic import BaseModel
+from app.core.security import get_current_user_id
+import os
+from pymongo import MongoClient
+
+MONGO_URI = os.getenv("MONGO_URI", "mongodb+srv://muhammadazmi8978_db_user:azmi12345678@amiii.uoskbzh.mongodb.net/?appName=amiii")
+mongo_client = MongoClient(MONGO_URI)
+mongo_db = mongo_client["muhammadazmi8978_db_user"]
+mongo_transactions = mongo_db["inventory_logs"]
 
 # Impor instance Supabase yang sudah ada, misalnya dari auth
 from app.routes.auth import supabase
@@ -25,7 +33,7 @@ async def scan_inventory(
     color: Optional[str] = Form(None),
     product_image: UploadFile = File(None),
     selling_price: Optional[int] = Form(None),
-    user_id: Optional[str] = Form(None)
+    current_user_id: str = Depends(get_current_user_id)
 ):
     print("\n" + "="*50)
     print("🚀 [LOG] Endpoint /api/v1/inventory/scan dipanggil!")
@@ -76,7 +84,7 @@ async def scan_inventory(
                 print(f"❌ [ERROR UPLOAD] Gagal upload foto: {e}")
             
         print(f"🔍 Mencari SKU '{sku_clean}' di tabel inventory Supabase...")
-        response = supabase.table("inventory").select("*").eq("sku", sku_clean).execute()
+        response = supabase.table("inventory").select("*").eq("sku", sku_clean).eq("user_id", current_user_id).execute()
         
         if response.data:
             print("✅ [INFO] SKU DITEMUKAN di database (Restock / Scan Out)!")
@@ -98,8 +106,21 @@ async def scan_inventory(
                 if image_url:
                     update_data["image_url"] = image_url
                     
-                if user_id:
-                    create_activity_log(user_id, "SCAN_IN", f"Scanned in product: {sku_clean}")
+                # Insert log ke MongoDB
+                mongo_log = {
+                    "user_id": current_user_id,
+                    "sku": sku_clean,
+                    "name": barang.get("name", "Unknown"),
+                    "category": barang.get("category", "Uncategorized"),
+                    "qty": qty,
+                    "type": "IN",
+                    "scan_type": "in",
+                    "timestamp": waktu_transaksi
+                }
+                mongo_transactions.insert_one(mongo_log)
+                    
+                if current_user_id:
+                    create_activity_log(current_user_id, "SCAN_IN", f"Scanned in product: {sku_clean}")
                     
                 message = "Berhasil update stok masuk"
             else: 
@@ -155,20 +176,37 @@ async def scan_inventory(
                         "qty": qty,
                         "selling_price": harga_jual,
                         "profit": profit_transaksi,
-                        "created_at": waktu_transaksi
+                        "created_at": waktu_transaksi,
+                        "user_id": current_user_id
                     }
                     supabase.table("transactions").insert(transaksi_data).execute()
+                    
+                    # Insert log ke MongoDB
+                    mongo_log = {
+                        "user_id": current_user_id,
+                        "sku": sku_clean,
+                        "name": barang.get("name", "Unknown"),
+                        "category": barang.get("category", "Uncategorized"),
+                        "qty": qty,
+                        "type": "OUT",
+                        "scan_type": "out",
+                        "harga_jual": harga_jual,
+                        "total_harga": profit_transaksi,
+                        "timestamp": waktu_transaksi
+                    }
+                    mongo_transactions.insert_one(mongo_log)
+                    
                     print(f"📝 [LOG] Riwayat transaksi berhasil dicatat.")
                 except Exception as e:
                     print(f"⚠️ [WARNING] Gagal mencatat riwayat transaksi: {e}")
                 
-                if user_id:
-                    create_activity_log(user_id, "SCAN_OUT", f"Scanned out product: {sku_clean}")
+                if current_user_id:
+                    create_activity_log(current_user_id, "SCAN_OUT", f"Scanned out product: {sku_clean}")
                     
                 message = "Berhasil update stok keluar"
                 
             # Eksekusi Update ke Database
-            supabase.table("inventory").update(update_data).eq("sku", sku_clean).execute()
+            supabase.table("inventory").update(update_data).eq("sku", sku_clean).eq("user_id", current_user_id).execute()
             print("✅ [SUCCESS] Stok dan last_updated berhasil di-update ke database!")
             
             barang.update(update_data) # Update response data
@@ -202,12 +240,27 @@ async def scan_inventory(
                 "qty": qty,
                 "status": "NORMAL",
                 "image_url": image_url,
-                "last_updated": waktu_transaksi
+                "last_updated": waktu_transaksi,
+                "user_id": current_user_id
             }
             
             supabase.table("inventory").insert(data_insert).execute()
-            if user_id:
-                create_activity_log(user_id, "SCAN_IN", f"Scanned in new product: {sku_clean}")
+            
+            # Insert log ke MongoDB
+            mongo_log = {
+                "user_id": current_user_id,
+                "sku": sku_clean,
+                "name": data_insert["name"],
+                "category": data_insert["category"],
+                "qty": qty,
+                "type": "IN",
+                "scan_type": "in",
+                "timestamp": waktu_transaksi
+            }
+            mongo_transactions.insert_one(mongo_log)
+            
+            if current_user_id:
+                create_activity_log(current_user_id, "SCAN_IN", f"Scanned in new product: {sku_clean}")
             print(f"✅ [SUCCESS] Barang baru (New Entry) berhasil ditambahkan ke database!")
             
             print("="*50 + "\n")
@@ -226,17 +279,17 @@ async def scan_inventory(
 
 
 @router.get("/all")
-def get_all_inventory(search: Optional[str] = None):
+def get_all_inventory(search: Optional[str] = None, current_user_id: str = Depends(get_current_user_id)):
     print("\n" + "="*50)
     print(f"🚀 [LOG] Flutter mengakses halaman Inventory (GET /all) (search={search})")
     try:
         if search:
             print(f"🔍 Mencari data inventory dengan kata kunci: '{search}'...")
-            response = supabase.table("inventory").select("*").or_(f"name.ilike.%{search}%,category.ilike.%{search}%").order("last_updated", desc=True).execute()
+            response = supabase.table("inventory").select("*").eq("user_id", current_user_id).or_(f"name.ilike.%{search}%,category.ilike.%{search}%").order("last_updated", desc=True).execute()
         else:
             print("🔍 Mengambil seluruh data inventory MURNI dari Supabase...")
             # Mengambil semua data asli dari tabel, diurutkan berdasarkan last_updated (paling baru di atas)
-            response = supabase.table("inventory").select("*").order("last_updated", desc=True).execute()
+            response = supabase.table("inventory").select("*").eq("user_id", current_user_id).order("last_updated", desc=True).execute()
         
         data_count = len(response.data) if response.data else 0
         print(f"✅ [SUCCESS] Berhasil mengambil {data_count} data murni dari database!")
@@ -268,12 +321,12 @@ class ProductUpdate(BaseModel):
     user_id: Optional[str] = None
 
 @router.delete("/{item_id}")
-def delete_inventory(item_id: int):
+def delete_inventory(item_id: int, current_user_id: str = Depends(get_current_user_id)):
     print("\n" + "="*50)
     print(f"🚀 [LOG] Endpoint DELETE /api/v1/inventory/{item_id} dipanggil!")
     try:
         # Cek apakah data ada
-        cek_data = supabase.table("inventory").select("id").eq("id", item_id).execute()
+        cek_data = supabase.table("inventory").select("id").eq("id", item_id).eq("user_id", current_user_id).execute()
         if not cek_data.data:
             print(f"❌ [ERROR] Gagal DELETE. ID '{item_id}' tidak ditemukan.")
             return JSONResponse(
@@ -282,7 +335,7 @@ def delete_inventory(item_id: int):
             )
             
         # Eksekusi Delete
-        supabase.table("inventory").delete().eq("id", item_id).execute()
+        supabase.table("inventory").delete().eq("id", item_id).eq("user_id", current_user_id).execute()
         print(f"✅ [SUCCESS] Berhasil menghapus ID: {item_id}")
         print("="*50 + "\n")
         
@@ -312,13 +365,13 @@ async def update_inventory(
     status: Optional[str] = Form(None),
     qty: Optional[int] = Form(None),
     product_image: UploadFile = File(None),
-    user_id: Optional[str] = Form(None)
+    current_user_id: str = Depends(get_current_user_id)
 ):
     print("\n" + "="*50)
     print(f"🚀 [LOG] Endpoint PUT /api/v1/inventory/{item_id} dipanggil!")
     try:
         # Cek apakah data ada
-        cek_data = supabase.table("inventory").select("*").eq("id", item_id).execute()
+        cek_data = supabase.table("inventory").select("*").eq("id", item_id).eq("user_id", current_user_id).execute()
         if not cek_data.data:
             print(f"❌ [ERROR] Gagal UPDATE. ID '{item_id}' tidak ditemukan.")
             return JSONResponse(
@@ -366,14 +419,14 @@ async def update_inventory(
         update_data["last_updated"] = datetime.now(timezone.utc).isoformat()
         
         # Eksekusi Update
-        response = supabase.table("inventory").update(update_data).eq("id", item_id).execute()
+        response = supabase.table("inventory").update(update_data).eq("id", item_id).eq("user_id", current_user_id).execute()
         print(f"✅ [SUCCESS] Berhasil memperbarui data ID: {item_id}")
         
         # LOG ACTIVITY JIKA BERHASIL
-        if user_id:
+        if current_user_id:
             try:
-                print(f"Merekam log edit produk untuk user {user_id}...")
-                create_activity_log(user_id, "EDIT_PRODUCT", f"Updated product: {name or 'Produk'}")
+                print(f"Merekam log edit produk untuk user {current_user_id}...")
+                create_activity_log(current_user_id, "EDIT_PRODUCT", f"Updated product: {name or 'Produk'}")
             except Exception as log_e:
                 print(f"⚠️ [WARNING] Gagal merekam log aktivitas: {log_e}")
                 

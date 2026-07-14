@@ -213,7 +213,7 @@ async def login(user_data: UserLogin):
         if not is_password_correct:
             raise HTTPException(status_code=400, detail="Password yang kamu masukkan salah!")
         
-        token = create_access_token(data={"sub": user_cloud["email"], "name": user_cloud["name"]})
+        token = create_access_token(data={"sub": user_cloud["email"], "name": user_cloud["name"], "user_id": str(user_cloud["id"])})
         
         # Rekam Log Aktivitas
         if user_cloud.get("id"):
@@ -393,7 +393,7 @@ async def google_login(request: Request):
             print(f"6b. Email {email_clean} ditemukan di Supabase. Melakukan proses login...")
             
         print("8. Membuat JWT Token untuk Frontend...")
-        token = create_access_token(data={"sub": user_data["email"], "name": user_data.get("name", "Google User")})
+        token = create_access_token(data={"sub": user_data["email"], "name": user_data.get("name", "Google User"), "user_id": str(user_data["id"])})
 
         if user_data.get("id"):
             create_activity_log(str(user_data["id"]), "LOGIN", "User logged in via Google")
@@ -889,7 +889,7 @@ async def face_login(file: UploadFile = File(...)):
         user_cloud = response.data[0]
         
         # 4. Generate JWT
-        token = create_access_token(data={"sub": user_cloud["email"], "name": user_cloud["name"]})
+        token = create_access_token(data={"sub": user_cloud["email"], "name": user_cloud["name"], "user_id": str(user_cloud["id"])})
         
         if user_cloud.get("id"):
             create_activity_log(str(user_cloud["id"]), "FACE_LOGIN", "User logged in via Face ID")
