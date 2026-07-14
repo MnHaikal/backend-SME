@@ -14,13 +14,21 @@ from app.core.email_utils import send_otp_email
 import os
 import shutil
 from app.utils.face_ai import extract_face_vector
+from pymongo import MongoClient
 
 router = APIRouter(prefix="/api/v1/auth", tags=["1. Authentication & Security"])
 
 # --- KONFIGURASI SUPABASE DIPINDAHKAN KE app/core/db.py ---
 
-# --- PENYIMPANAN OTP SEMENTARA ---
-otp_storage = {}
+# --- KONFIGURASI MONGODB UNTUK OTP ---
+MONGO_URI = os.getenv("MONGO_URI", "mongodb+srv://muhammadazmi8978_db_user:azmi12345678@amiii.uoskbzh.mongodb.net/?appName=amiii")
+mongo_client = MongoClient(MONGO_URI)
+mongo_db = mongo_client["muhammadazmi8978_db_user"]
+mongo_otps = mongo_db["otps"]
+
+class VerifyRegisterRequest(BaseModel):
+    email: str
+    otp: str
 
 class UserDataResponse(BaseModel):
     name: str
@@ -52,19 +60,19 @@ async def register(
         # Cek apakah email sudah ada di tabel 'users' Supabase cloud
         response = supabase.table("users").select("email").eq("email", email_clean).execute()
         if response.data:
-            raise HTTPException(status_code=400, detail="Email sudah terdaftar di cloud database!")
+            raise HTTPException(status_code=400, detail="Email sudah terdaftar di database!")
 
         # Upload Foto Profil (Jika Ada)
         photo_url = None
         if profile_picture and profile_picture.filename:
             try:
-                # Buat nama file unik (misal: 123e4567-e89b-12d3.jpg)
+                # Buat nama file unik
                 file_extension = profile_picture.filename.split(".")[-1]
                 file_name = f"{uuid.uuid4()}.{file_extension}"
                 
                 file_bytes = await profile_picture.read()
                 
-                # Upload ke Supabase Storage (bucket: profile_pictures)
+                # Upload ke Supabase Storage
                 supabase.storage.from_("profile_pictures").upload(
                     file_name,
                     file_bytes,
@@ -76,13 +84,14 @@ async def register(
             except Exception as e:
                 print(f"GAGAL UPLOAD FOTO: {e}")
 
-        # Hash password (Keamanan Data) dan lempar ke cloud
+        # Hash password dan insert ke Supabase dengan status pending
         hashed_password = get_password_hash(password_clean)
         insert_response = supabase.table("users").insert({
             "email": email_clean,
             "name": name_clean,
             "password": hashed_password,
-            "photo_url": photo_url
+            "photo_url": photo_url,
+            "status": "pending" # HANYA jika Anda sudah menambah kolom ini di tabel users
         }).execute()
         
         print(f"Data tersimpan di DB: {insert_response.data}")
@@ -90,14 +99,33 @@ async def register(
         if insert_response.data and len(insert_response.data) > 0:
             new_user_id = insert_response.data[0].get("id")
             if new_user_id:
-                create_activity_log(str(new_user_id), "REGISTER", "User registered")
+                create_activity_log(str(new_user_id), "REGISTER_PENDING", "User registered, pending OTP verification")
 
-        print(f"=== CLOUD SUPABASE: Berhasil mendaftarkan akun {email_clean} ===")
+        # GENERATE OTP
+        otp_code = "".join(random.choices(string.digits, k=6))
+        expires_at = datetime.now(timezone.utc) + timedelta(minutes=5)
+        
+        # Simpan ke MongoDB (Upsert agar OTP lama tertimpa)
+        mongo_otps.update_one(
+            {"email": email_clean},
+            {"$set": {
+                "otp": otp_code,
+                "expires_at": expires_at,
+                "type": "register"
+            }},
+            upsert=True
+        )
+
+        # Kirim email
+        send_otp_email(email_clean, otp_code)
+
+        print(f"=== CLOUD SUPABASE: Pendaftaran pending {email_clean}. OTP Terkirim ===")
         return {
             "status": "success", 
+            "message": "Pendaftaran berhasil, silakan cek email Anda untuk kode OTP verifikasi.",
             "data": {
                 "name": name_clean, 
-                "photo_url": photo_url
+                "email": email_clean
             }
         }
     
@@ -105,6 +133,49 @@ async def register(
         raise http_err
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Gagal koneksi atau struktur tabel Supabase salah: {str(e)}")
+
+@router.post("/verify-register")
+def verify_register(request: VerifyRegisterRequest):
+    email_clean = request.email.strip()
+    otp_clean = request.otp.strip()
+
+    try:
+        # Cari OTP di MongoDB
+        otp_doc = mongo_otps.find_one({"email": email_clean, "type": "register"})
+        if not otp_doc:
+            raise HTTPException(status_code=400, detail="OTP tidak ditemukan atau sudah digunakan.")
+
+        # Cek expired
+        if datetime.now(timezone.utc) > otp_doc["expires_at"].replace(tzinfo=timezone.utc):
+            mongo_otps.delete_one({"_id": otp_doc["_id"]})
+            raise HTTPException(status_code=400, detail="Kode OTP telah kedaluwarsa. Silakan mendaftar ulang atau minta OTP baru.")
+
+        # Cek OTP cocok
+        if otp_doc["otp"] != otp_clean:
+            raise HTTPException(status_code=400, detail="Kode OTP salah.")
+
+        # Update status di Supabase menjadi active
+        update_response = supabase.table("users").update({"status": "active"}).eq("email", email_clean).execute()
+        
+        if not update_response.data:
+            raise HTTPException(status_code=400, detail="Gagal mengaktifkan akun. Pastikan email terdaftar.")
+
+        # Hapus OTP dari MongoDB
+        mongo_otps.delete_one({"_id": otp_doc["_id"]})
+
+        user_id = update_response.data[0].get("id")
+        if user_id:
+            create_activity_log(str(user_id), "REGISTER_VERIFIED", "User email verified via OTP")
+
+        return {
+            "status": "success",
+            "message": "Akun berhasil diverifikasi dan diaktifkan. Silakan login."
+        }
+
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Gagal verifikasi OTP: {str(e)}")
 
 @router.post("/login", response_model=LoginResponseSchema)
 async def login(user_data: UserLogin):
@@ -114,13 +185,16 @@ async def login(user_data: UserLogin):
     
     try:
         # 2. Ambil data user secara real-time dari database cloud Supabase
-        response = supabase.table("users").select("id", "name", "email", "password", "photo_url").eq("email", email_clean).execute()
+        response = supabase.table("users").select("id", "name", "email", "password", "photo_url", "status").eq("email", email_clean).execute()
         
         if not response.data:
             raise HTTPException(status_code=400, detail="Email tidak terdaftar!")
         
         # Ambil baris data pertama hasil pencarian
         user_cloud = response.data[0]
+        
+        if user_cloud.get("status") == "pending":
+            raise HTTPException(status_code=400, detail="Akun belum diverifikasi. Silakan cek email Anda untuk kode OTP verifikasi.")
         
         print("\n=== DEBUG LOGIN ===")
         print(f"Data user dari DB: {user_cloud}")
@@ -178,11 +252,16 @@ async def request_otp(request: OTPRequest):
         # Buat waktu kedaluwarsa 5 menit dari sekarang (UTC)
         otp_expiry = datetime.now(timezone.utc) + timedelta(minutes=5)
         
-        # Simpan OTP di memori global
-        otp_storage[email_clean] = {
-            "otp": otp_code,
-            "expires": otp_expiry
-        }
+        # Simpan OTP di MongoDB
+        mongo_otps.update_one(
+            {"email": email_clean},
+            {"$set": {
+                "otp": otp_code,
+                "expires_at": otp_expiry,
+                "type": "register"
+            }},
+            upsert=True
+        )
         
         # Kirim OTP via email
         send_otp_email(email_clean, otp_code)
@@ -375,12 +454,7 @@ async def update_user_profile(user_id: str, user_data: UserUpdateSchema):
         print(f"Error Update Profile: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-import smtplib
-from email.mime.text import MIMEText
 
-# Konfigurasi SMTP Gmail
-SENDER_EMAIL = "smallmediumenterprices@gmail.com"
-SENDER_PASSWORD = "wkluuynmenqeywgd"
 
 @router.post("/forgot-password")
 async def forgot_password(request: ForgotPasswordRequest):
@@ -388,31 +462,36 @@ async def forgot_password(request: ForgotPasswordRequest):
         email_clean = request.email.strip()
         
         # 1. Cek apakah email terdaftar di database
-        response = supabase.table("users").select("email").eq("email", email_clean).execute()
+        response = supabase.table("users").select("id", "email").eq("email", email_clean).execute()
         if not response.data:
             raise HTTPException(status_code=404, detail="Email tidak terdaftar!")
+            
+        user_id = response.data[0].get("id")
             
         # 2. Generate 6 digit OTP string
         otp_code = "".join(random.choices(string.digits, k=6))
         
-        # 3. Buat waktu kedaluwarsa 5 menit (Gunakan format ISO Supabase)
-        otp_expiry = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()
+        # 3. Buat waktu kedaluwarsa 5 menit
+        expires_at = datetime.now(timezone.utc) + timedelta(minutes=5)
         
-        # 4. Simpan OTP ke tabel users (Operasi UPDATE)
-        response_update = supabase.table("users").update({
-            "otp_code": otp_code,
-            "otp_expiry": otp_expiry
-        }).eq("email", email_clean).execute()
+        # 4. Simpan OTP ke MongoDB
+        mongo_otps.update_one(
+            {"email": email_clean},
+            {"$set": {
+                "otp": otp_code,
+                "expires_at": expires_at,
+                "type": "reset_password"
+            }},
+            upsert=True
+        )
         
-        if response_update.data and len(response_update.data) > 0:
-            user_id = response_update.data[0].get("id")
-            if user_id:
-                create_activity_log(str(user_id), "FORGOT_PASSWORD", "Requested password reset")
+        if user_id:
+            create_activity_log(str(user_id), "FORGOT_PASSWORD", "Requested password reset via OTP")
         
         # 5. Print OTP di terminal VS Code untuk testing
         print(f"OTP untuk {email_clean} adalah: {otp_code}")
         
-        # 6. Kirim OTP via Email dengan fungsi tersentralisasi (Brevo API)
+        # 6. Kirim OTP via Email
         try:
             send_otp_email(email_clean, otp_code)
             print(f"Berhasil mengirim email OTP ke {email_clean}")
@@ -445,72 +524,37 @@ async def reset_password(request: ResetPasswordRequest):
         if len(otp_code_clean) != 6 or not otp_code_clean.isdigit():
             raise HTTPException(status_code=400, detail="OTP harus 6 digit angka")
             
-        # 2. Ambil data dari Supabase berdasarkan email
-        response = supabase.table("users").select("otp_code", "otp_expiry").eq("email", email_clean).execute()
-        
-        if not response.data:
-            raise HTTPException(status_code=404, detail="Email tidak ditemukan")
+        # 2. Cari OTP di MongoDB
+        otp_doc = mongo_otps.find_one({"email": email_clean, "type": "reset_password"})
+        if not otp_doc:
+            raise HTTPException(status_code=400, detail="Tidak ada permintaan reset password aktif atau OTP salah.")
             
-        user_data = response.data[0]
-        
-        # Periksa apakah sedang dalam mode reset password
-        if not user_data.get("otp_code") or not user_data.get("otp_expiry"):
-            raise HTTPException(status_code=400, detail="Tidak ada permintaan reset password aktif.")
+        # 3. Cek Kedaluwarsa
+        if datetime.now(timezone.utc) > otp_doc["expires_at"].replace(tzinfo=timezone.utc):
+            mongo_otps.delete_one({"_id": otp_doc["_id"]})
+            raise HTTPException(status_code=400, detail="OTP sudah kedaluwarsa. Silakan request ulang.")
             
-        # 3. Cocokkan OTP (Kunci Utama)
-        if otp_code_clean != user_data["otp_code"]:
+        # 4. Cocokkan OTP
+        if otp_code_clean != otp_doc["otp"]:
             raise HTTPException(status_code=400, detail="Kode OTP Salah!")
             
-        # 4. Cek Kedaluwarsa dengan Parsing Waktu Tahan Banting
-        expiry_str = str(user_data["otp_expiry"]).strip()
-        
-        # Ganti 'Z' menjadi '+00:00' untuk standarisasi zona waktu UTC
-        if expiry_str.endswith('Z'):
-            expiry_str = expiry_str[:-1] + '+00:00'
-            
-        try:
-            # Parsing ISO 8601
-            otp_expiry_dt = datetime.fromisoformat(expiry_str)
-            
-            # Jika data dari Supabase tidak memiliki timezone, paksakan sebagai UTC
-            if otp_expiry_dt.tzinfo is None:
-                otp_expiry_dt = otp_expiry_dt.replace(tzinfo=timezone.utc)
-                
-        except ValueError:
-            # Fallback tingkat dewa: Jika Python gagal memparsing karena desimal milidetik (fractional seconds) 
-            # dari Supabase terlalu panjang, kita potong desimalnya
-            if "." in expiry_str:
-                main_part, rest = expiry_str.split(".", 1)
-                tz_part = ""
-                if "+" in rest:
-                    tz_part = "+" + rest.split("+")[1]
-                elif "-" in rest:
-                    tz_part = "-" + rest.split("-")[1]
-                
-                clean_expiry_str = main_part + tz_part
-                try:
-                    otp_expiry_dt = datetime.fromisoformat(clean_expiry_str)
-                    if otp_expiry_dt.tzinfo is None:
-                        otp_expiry_dt = otp_expiry_dt.replace(tzinfo=timezone.utc)
-                except Exception:
-                    raise HTTPException(status_code=500, detail="Kesalahan format waktu dari database.")
-            else:
-                raise HTTPException(status_code=500, detail="Kesalahan format waktu dari database.")
-            
-        # Ambil waktu sekarang dengan zona waktu UTC
-        now_utc = datetime.now(timezone.utc)
-        
-        if now_utc > otp_expiry_dt:
-            raise HTTPException(status_code=400, detail="OTP sudah kedaluwarsa")
-            
-        # 5. Jika semua lolos, update password & kosongkan OTP
+        # 5. Jika lolos, hash password baru
         hashed_password = get_password_hash(password_clean)
         
-        supabase.table("users").update({
-            "password": hashed_password,
-            "otp_code": None,
-            "otp_expiry": None
+        # Update di Supabase
+        update_response = supabase.table("users").update({
+            "password": hashed_password
         }).eq("email", email_clean).execute()
+        
+        if not update_response.data:
+            raise HTTPException(status_code=404, detail="Gagal mengubah password. Pastikan email terdaftar.")
+            
+        # 6. Hapus OTP dari MongoDB
+        mongo_otps.delete_one({"_id": otp_doc["_id"]})
+        
+        user_id = update_response.data[0].get("id")
+        if user_id:
+            create_activity_log(str(user_id), "RESET_PASSWORD", "User successfully reset their password")
         
         return {"message": "Password berhasil diubah."}
         
@@ -525,51 +569,18 @@ async def verify_reset_otp(request: OTPVerifyRequest):
     otp_code_clean = request.otp_code.strip()
     
     try:
-        response = supabase.table("users").select("otp_code", "otp_expiry").eq("email", email_clean).execute()
-        
-        if not response.data:
-            raise HTTPException(status_code=404, detail="Email tidak terdaftar!")
+        # Cari OTP di MongoDB
+        otp_doc = mongo_otps.find_one({"email": email_clean, "type": "reset_password"})
+        if not otp_doc:
+            raise HTTPException(status_code=400, detail="Tidak ada permintaan reset password aktif atau OTP salah.")
             
-        user_data = response.data[0]
-        
-        if not user_data.get("otp_code") or not user_data.get("otp_expiry"):
-            raise HTTPException(status_code=400, detail="Tidak ada permintaan reset password aktif.")
-            
-        if otp_code_clean != user_data["otp_code"]:
+        # Cocokkan OTP
+        if otp_code_clean != otp_doc["otp"]:
             raise HTTPException(status_code=400, detail="Kode OTP salah.")
             
-        # Validasi waktu kedaluwarsa dengan Parsing Tahan Banting
-        expiry_str = str(user_data["otp_expiry"]).strip()
-        
-        if expiry_str.endswith('Z'):
-            expiry_str = expiry_str[:-1] + '+00:00'
-            
-        try:
-            otp_expiry_dt = datetime.fromisoformat(expiry_str)
-            if otp_expiry_dt.tzinfo is None:
-                otp_expiry_dt = otp_expiry_dt.replace(tzinfo=timezone.utc)
-        except ValueError:
-            if "." in expiry_str:
-                main_part, rest = expiry_str.split(".", 1)
-                tz_part = ""
-                if "+" in rest:
-                    tz_part = "+" + rest.split("+")[1]
-                elif "-" in rest:
-                    tz_part = "-" + rest.split("-")[1]
-                
-                clean_expiry_str = main_part + tz_part
-                try:
-                    otp_expiry_dt = datetime.fromisoformat(clean_expiry_str)
-                    if otp_expiry_dt.tzinfo is None:
-                        otp_expiry_dt = otp_expiry_dt.replace(tzinfo=timezone.utc)
-                except Exception:
-                    raise HTTPException(status_code=500, detail="Kesalahan format waktu dari database.")
-            else:
-                raise HTTPException(status_code=500, detail="Kesalahan format waktu dari database.")
-            
-        now_utc = datetime.now(timezone.utc)
-        
-        if now_utc > otp_expiry_dt:
+        # Cek Kedaluwarsa
+        if datetime.now(timezone.utc) > otp_doc["expires_at"].replace(tzinfo=timezone.utc):
+            mongo_otps.delete_one({"_id": otp_doc["_id"]})
             raise HTTPException(status_code=400, detail="Kode OTP telah kedaluwarsa.")
             
         return {"message": "OTP valid."}
@@ -787,20 +798,20 @@ async def register_face(
     otp_clean = otp.strip()
     
     # 1. Validasi OTP terlebih dahulu
-    stored_otp_data = otp_storage.get(email_clean)
-    if not stored_otp_data:
+    otp_doc = mongo_otps.find_one({"email": email_clean, "type": "register"})
+    if not otp_doc:
         raise HTTPException(status_code=400, detail="OTP tidak valid atau belum request OTP")
         
-    if stored_otp_data["otp"] != otp_clean:
+    if otp_doc["otp"] != otp_clean:
         raise HTTPException(status_code=400, detail="OTP tidak valid")
         
     now_utc = datetime.now(timezone.utc)
-    if now_utc > stored_otp_data["expires"]:
-        del otp_storage[email_clean]
+    if now_utc > otp_doc["expires_at"].replace(tzinfo=timezone.utc):
+        mongo_otps.delete_one({"_id": otp_doc["_id"]})
         raise HTTPException(status_code=400, detail="OTP sudah kedaluwarsa")
         
     # Hapus OTP setelah digunakan
-    del otp_storage[email_clean]
+    mongo_otps.delete_one({"_id": otp_doc["_id"]})
     
     # 2. Cek apakah email sudah ada di tabel 'users'
     try:
