@@ -40,6 +40,7 @@ def get_notifications(current_user_id: str = Depends(get_current_user_id)):
                     
             if profit_harian > 1000000:
                 notifications.append({
+                    "id": f"profit_{now.strftime('%Y%m%d')}",
                     "title": "Info Cuan",
                     "message": "Cuan banyak hari ini",
                     "type": "profit"
@@ -55,6 +56,7 @@ def get_notifications(current_user_id: str = Depends(get_current_user_id)):
                         cat = resp_inv.data[0].get("category") or "Produk"
                     
                     notifications.append({
+                        "id": f"bestseller_{sku}_{now.strftime('%Y%m%d')}",
                         "title": "Produk Terlaris Harian",
                         "message": f"[{cat}] penjual terlaris hari ini",
                         "type": "bestseller"
@@ -65,17 +67,19 @@ def get_notifications(current_user_id: str = Depends(get_current_user_id)):
             
         # 3. & 4. Cek Low Stock dan Dead Stock
         try:
-            resp_inv_all = supabase.table("inventory").select("name, qty, last_updated").eq("user_id", current_user_id).execute()
+            resp_inv_all = supabase.table("inventory").select("name, sku, qty, last_updated").eq("user_id", current_user_id).execute()
             data_inv = resp_inv_all.data or []
             
             for item in data_inv:
                 name = item.get("name") or "Unknown"
+                sku = item.get("sku") or name
                 qty = item.get("qty") or 0
                 last_updated_str = item.get("last_updated")
                 
                 # Low Stock
                 if qty < 16:
                     notifications.append({
+                        "id": f"low_stock_{sku}_{now.strftime('%Y%m%d')}",
                         "title": "Stok Menipis",
                         "message": f"Perlu Restoke kembali: [{name}]",
                         "type": "low_stock"
@@ -93,6 +97,7 @@ def get_notifications(current_user_id: str = Depends(get_current_user_id)):
                         days_diff = (now - last_updated_date_wib).days
                         if days_diff > 90:
                             notifications.append({
+                                "id": f"dead_stock_{sku}_{now.strftime('%Y%m%d')}",
                                 "title": "Dead Stock Terdeteksi",
                                 "message": f"Dead Stock: [{name}] tidak laku > 3 bulan",
                                 "type": "dead_stock"
