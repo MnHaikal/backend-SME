@@ -1,6 +1,7 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from app.routes.auth import supabase
+from app.core.security import get_current_user_id
 from datetime import datetime, timezone, timedelta
 
 router = APIRouter(
@@ -9,7 +10,7 @@ router = APIRouter(
 )
 
 @router.get("/")
-def get_notifications():
+def get_notifications(current_user_id: str = Depends(get_current_user_id)):
     print("\n" + "="*50)
     print("🚀 [LOG] Endpoint GET /api/v1/notifications dipanggil!")
     try:
@@ -22,7 +23,7 @@ def get_notifications():
         
         try:
             # Ambil transaksi hari ini
-            resp_trans = supabase.table("transactions").select("*").gte("created_at", today_start).execute()
+            resp_trans = supabase.table("transactions").select("*").eq("user_id", current_user_id).gte("created_at", today_start).execute()
             data_trans = resp_trans.data or []
             
             # Hitung profit harian dan cari best seller harian
@@ -48,7 +49,7 @@ def get_notifications():
             for sku, total_q in qty_per_sku.items():
                 if total_q > 120:
                     # Ambil kategori produk dari inventory
-                    resp_inv = supabase.table("inventory").select("category").eq("sku", sku).execute()
+                    resp_inv = supabase.table("inventory").select("category").eq("user_id", current_user_id).eq("sku", sku).execute()
                     cat = "Produk"
                     if resp_inv.data:
                         cat = resp_inv.data[0].get("category") or "Produk"
@@ -64,7 +65,7 @@ def get_notifications():
             
         # 3. & 4. Cek Low Stock dan Dead Stock
         try:
-            resp_inv_all = supabase.table("inventory").select("name, qty, last_updated").execute()
+            resp_inv_all = supabase.table("inventory").select("name, qty, last_updated").eq("user_id", current_user_id).execute()
             data_inv = resp_inv_all.data or []
             
             for item in data_inv:
