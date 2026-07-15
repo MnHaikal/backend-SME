@@ -60,10 +60,11 @@ def get_current_user_id(request: Request, credentials: Optional[HTTPAuthorizatio
     if query_user_id:
         return query_user_id
 
-    # [WORKAROUND] Karena Flutter tidak mengirim Auth/Token/user_id di request GET,
-    # Bypass dengan ID milik user yang sedang aktif dipakai untuk development
-    print("⚠️ [WARNING] Auth missing in GET request. Using fallback user_id!")
-    return "f9ea984c-9147-446e-813d-34985e0d0ab1"
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Token tidak valid atau kedaluwarsa",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
 
 security_optional = HTTPBearer(auto_error=False)
 
@@ -100,7 +101,4 @@ def get_optional_current_user_id(request: Request, credentials: Optional[HTTPAut
     if query_user_id:
         return query_user_id
         
-    # [WORKAROUND] Karena Flutter tidak mengirim Auth/Token/user_id di request GET,
-    # Bypass dengan ID milik user yang sedang aktif dipakai untuk development
-    print("⚠️ [WARNING] Auth missing in GET request. Using fallback user_id!")
-    return "f9ea984c-9147-446e-813d-34985e0d0ab1"
+    return None
