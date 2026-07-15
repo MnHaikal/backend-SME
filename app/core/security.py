@@ -34,37 +34,59 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
-security = HTTPBearer()
+security = HTTPBearer(auto_error=False)
 
-def get_current_user_id(credentials: HTTPAuthorizationCredentials = Depends(security)) -> str:
-    """Mengekstrak user_id dari token JWT untuk Multi-Tenancy"""
-    token = credentials.credentials
-    credentials_exception = HTTPException(
+def get_current_user_id(request: Request, credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)) -> str:
+    """Mengekstrak user_id dari token JWT, atau Header/Query param untuk Multi-Tenancy"""
+    if credentials and credentials.credentials:
+        try:
+            payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
+            user_id = payload.get("user_id")
+            if user_id:
+                return user_id
+        except JWTError:
+            pass
+            
+    # Fallback to headers
+    header_user_id = request.headers.get("user_id") or request.headers.get("user-id")
+    if header_user_id:
+        return header_user_id
+        
+    # Fallback to query param
+    query_user_id = request.query_params.get("user_id")
+    if query_user_id:
+        return query_user_id
+
+    raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Token tidak valid atau kedaluwarsa",
         headers={"WWW-Authenticate": "Bearer"},
     )
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id: str = payload.get("user_id")
-        if user_id is None:
-            raise credentials_exception
-        return user_id
-    except JWTError:
-        raise credentials_exception
 
 security_optional = HTTPBearer(auto_error=False)
 
-def get_optional_current_user_id(credentials: HTTPAuthorizationCredentials = Depends(security_optional)) -> Optional[str]:
-    """Mengekstrak user_id dari token JWT, tidak error jika kosong"""
-    if not credentials:
-        return None
-    token = credentials.credentials
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        return payload.get("user_id")
-    except JWTError:
-        return None
+def get_optional_current_user_id(request: Request, credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_optional)) -> Optional[str]:
+    """Mengekstrak user_id dari token JWT, atau Header/Query, tidak error jika kosong"""
+    if credentials and credentials.credentials:
+        try:
+            payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
+            user_id = payload.get("user_id")
+            if user_id:
+                return user_id
+        except JWTError:
+            pass
+            
+    # Fallback to headers
+    header_user_id = request.headers.get("user_id") or request.headers.get("user-id")
+    if header_user_id:
+        return header_user_id
+        
+    # Fallback to query param
+    query_user_id = request.query_params.get("user_id")
+    if query_user_id:
+        return query_user_id
+        
+    return None

@@ -249,8 +249,9 @@ async def scan_inventory(
                 "user_id": current_user_id
             }
             
-            supabase.table("inventory").insert(data_insert).execute()
-            
+            response_insert = supabase.table("inventory").insert(data_insert).execute()
+            if response_insert.data:
+                data_insert["id"] = response_insert.data[0].get("id")
             # Insert log ke MongoDB
             mongo_log = {
                 "user_id": current_user_id,
