@@ -70,13 +70,25 @@ security_optional = HTTPBearer(auto_error=False)
 
 def get_optional_current_user_id(request: Request, credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_optional)) -> Optional[str]:
     """Mengekstrak user_id dari token JWT, atau Header/Query, tidak error jika kosong"""
+    
+    print("\n--- DEBUG GET REQUEST ---")
+    print(f"URL: {request.url}")
+    print(f"Headers: {request.headers}")
+    print(f"Query Params: {request.query_params}")
+    if credentials:
+        print(f"Token present: {credentials.credentials[:10]}...")
+    else:
+        print("No Authorization token found.")
+    print("-------------------------\n")
+
     if credentials and credentials.credentials:
         try:
             payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
             user_id = payload.get("user_id")
             if user_id:
                 return user_id
-        except JWTError:
+        except JWTError as e:
+            print(f"JWT Decode Error: {e}")
             pass
             
     # Fallback to headers
