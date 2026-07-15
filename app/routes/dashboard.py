@@ -2,8 +2,17 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from app.routes.auth import supabase
 from app.core.security import get_current_user_id
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+from collections import defaultdict
+import calendar
+import os
+from pymongo import MongoClient
 
+# Setup MongoDB Connection untuk Analytics
+MONGO_URI = os.getenv("MONGO_URI", "mongodb+srv://muhammadazmi8978_db_user:azmi12345678@amiii.uoskbzh.mongodb.net/?appName=amiii")
+mongo_client = MongoClient(MONGO_URI)
+mongo_db = mongo_client["muhammadazmi8978_db_user"]
+mongo_transactions = mongo_db["inventory_logs"]
 router = APIRouter(
     prefix="/api/v1/dashboard",
     tags=["Dashboard"]
@@ -117,28 +126,54 @@ def get_dashboard_stats(current_user_id: str = Depends(get_current_user_id)):
         inv_response = supabase.table("inventory").select("qty").eq("user_id", current_user_id).execute()
         total_inventory = sum(item.get("qty", 0) for item in inv_response.data) if inv_response.data else 0
         
-        # 2. Hitung akumulasi potential_profit per bulan (12 bulan terakhir) khusus user ini
+        # 2. Ambil data transaksi dari MongoDB (inventory_logs) untuk user ini
         now = datetime.now(timezone.utc)
         twelve_months_ago = now - timedelta(days=365)
         
-        tx_response = supabase.table("transactions").select("profit, created_at").eq("user_id", current_user_id).eq("scan_type", "out").gte("created_at", twelve_months_ago.isoformat()).execute()
+        # Format ISO string untuk query MongoDB (sama dengan format timestamp yang disimpan)
+        start_date_str = twelve_months_ago.isoformat()
+        
+        pipeline = [
+            {"$match": {
+                "user_id": current_user_id,
+                "timestamp": {"$gte": start_date_str}
+            }},
+            {"$project": {
+                "scan_type": {"$toLower": "$scan_type"},
+                "qty": 1,
+                "total_harga": 1,
+                "timestamp": 1
+            }}
+        ]
+        
+        mongo_logs = list(mongo_transactions.aggregate(pipeline))
         
         labels = []
         profit_data = []
-        monthly_profits = defaultdict(float)
+        scan_in_data = []
+        scan_out_data = []
         
-        if tx_response.data:
-            for tx in tx_response.data:
-                created_at_str = tx.get("created_at")
-                profit = float(tx.get("profit") or 0)
-                if created_at_str:
-                    try:
-                        tx_date = datetime.fromisoformat(created_at_str.replace("Z", "+00:00"))
-                        month_key = f"{tx_date.year}-{tx_date.month:02d}"
-                        monthly_profits[month_key] += profit
-                    except Exception:
-                        pass
-                        
+        monthly_profits = defaultdict(float)
+        monthly_scan_in = defaultdict(int)
+        monthly_scan_out = defaultdict(int)
+        
+        for log in mongo_logs:
+            ts_str = log.get("timestamp")
+            if ts_str:
+                try:
+                    ts_date = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                    month_key = f"{ts_date.year}-{ts_date.month:02d}"
+                    
+                    s_type = log.get("scan_type")
+                    if s_type == "in":
+                        monthly_scan_in[month_key] += log.get("qty", 0)
+                    elif s_type == "out":
+                        monthly_scan_out[month_key] += log.get("qty", 0)
+                        # Hitung profit hanya dari scan OUT
+                        monthly_profits[month_key] += float(log.get("total_harga") or 0)
+                except Exception:
+                    pass
+                    
         indonesian_months = {
             1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr", 5: "Mei", 6: "Jun",
             7: "Jul", 8: "Agu", 9: "Sep", 10: "Okt", 11: "Nov", 12: "Des"
@@ -155,6 +190,8 @@ def get_dashboard_stats(current_user_id: str = Depends(get_current_user_id)):
             month_key = f"{target_year}-{target_month:02d}"
             labels.append(indonesian_months[target_month])
             profit_data.append(monthly_profits.get(month_key, 0.0))
+            scan_in_data.append(monthly_scan_in.get(month_key, 0))
+            scan_out_data.append(monthly_scan_out.get(month_key, 0))
 
         print(f"✅ [SUCCESS] Dashboard stats: Total Inventory: {total_inventory}")
         print("="*50 + "\n")
@@ -163,6 +200,8 @@ def get_dashboard_stats(current_user_id: str = Depends(get_current_user_id)):
             content={
                 "total_inventory": total_inventory,
                 "profit_data": profit_data,
+                "scan_in_data": scan_in_data,
+                "scan_out_data": scan_out_data,
                 "labels": labels
             }
         )
