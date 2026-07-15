@@ -85,8 +85,9 @@ app.include_router(notifications.router)
 app.include_router(analytics.router)
 app.include_router(activity_logs.router)
 
-from app.routes import scraper
+from app.routes import scraper, privacy
 app.include_router(scraper.router)
+app.include_router(privacy.router)
 
 @app.get("/", tags=["Root"])
 async def root():
