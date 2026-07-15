@@ -9,7 +9,7 @@ router = APIRouter(
     tags=["Notifications"]
 )
 
-@router.get("/")
+@router.get("")
 def get_notifications(current_user_id: str = Depends(get_current_user_id)):
     print("\n" + "="*50)
     print("🚀 [LOG] Endpoint GET /api/v1/notifications dipanggil!")
